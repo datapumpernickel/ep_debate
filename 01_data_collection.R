@@ -163,9 +163,9 @@ only_debates <- all_tops |>
 dir <- '01_raw_data/debates'
 dir.create(dir,recursive = T)
 
-
+id <- only_debates$id[1]
 get_debate <- function(url,dir,id){
-  if (!file.exists(glue('{dir}/{id}.html'))) {
+  if (!file.exists(glue('{dir}/{id}'))) {
     res <- request(url) |>
       req_throttle(120 / 60) |>
       req_perform() |>
@@ -174,6 +174,32 @@ get_debate <- function(url,dir,id){
   }
 }
 
-future::plan("multisession", workers = 3)
+future::plan("multisession", workers = 24)
 future_pmap(list(url = only_debates$orders_ref, dir = dir,id = only_debates$id),get_debate,.progress = T)
 
+files <- list.files(dir,full.names = T)
+
+path <- files[100]
+
+parse_debate <- function(path){
+  html <- read_html(path)
+
+  paragraphs_header <- html_elements(html, '.contents') |>
+    map_chr(~html_element(.x,'.doc_subtitle_level1_bis') |>  html_text())
+
+  paragraphs_text <- html_elements(html, '.contents') |>
+    map_chr(html_text)
+
+  party <- html_elements(html, '.contents') |>
+    map_chr(~html_element(.x,'.bold') |>  html_text())
+
+  parl_function <- html_elements(html, '.contents') |>
+    map_chr(~html_element(.x,'.italic') |>  html_text())
+
+  result <- tibble(paragraphs_text, paragraphs_header, path) |>
+    fill(paragraphs_header, .direction = 'down')
+
+}
+
+future::plan("multisession", workers = 12)
+test <- future_map_dfr(files[1:1000],parse_debate)
