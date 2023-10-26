@@ -30,7 +30,7 @@ p_load(char = packs)
 dir <- '01_raw_data/calendar'
 
 get_calendar <- function(termid, dir){
-
+  if(!file.exists(glue('{dir}/{termid}.csv'))){
   url <- "https://www.europarl.europa.eu/plenary/en/ajax/getSessionCalendar.html?family=CRE&termId="
   composed_url <- glue(url,termid)
   res <- request(composed_url) |>
@@ -38,7 +38,7 @@ get_calendar <- function(termid, dir){
     resp_body_json(simplifyVector = T) |>
     pluck("sessionCalendar")
 
-  write_csv(res,glue('{dir}/{termid}.csv'))
+  write_csv(res,glue('{dir}/{termid}.csv'))}
 }
 
 dir.create(dir,recursive = T)
@@ -156,7 +156,8 @@ only_debates <- all_tops |>
   filter(!str_detect(orders,'adjournment of the session'))|>
   filter(!str_detect(orders,'question time '))|>
   filter(!str_detect(orders,'order of business ')) |>
-  mutate(id = str_remove_all(orders_ref,'/doceo/document/'))
+  mutate(id = str_remove_all(orders_ref,'/doceo/document/')) |>
+  mutate(orders_ref = str_c('https://www.europarl.europa.eu',orders_ref))
 
 
 dir <- '01_raw_data/debates'
@@ -169,9 +170,10 @@ get_debate <- function(url,dir,id){
       req_throttle(120 / 60) |>
       req_perform() |>
       resp_body_string() |>
-      write_lines(glue('{dir}/{id}.html'))
+      write_lines(glue('{dir}/{id}'))
   }
 }
+
 future::plan("multisession", workers = 3)
-future_pmap(list(url = only_debates$orders_ref, dir = dir,id = only_debates$id),get_tocs,.progress = T)
+future_pmap(list(url = only_debates$orders_ref, dir = dir,id = only_debates$id),get_debate,.progress = T)
 
