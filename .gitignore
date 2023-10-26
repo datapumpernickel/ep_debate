@@ -2,6 +2,7 @@
 .Rhistory
 .RData
 ^cran-comments\.md$
+*.Rproj
 TODO.md
 /revdep/.cache.rds
 .DS_Store
