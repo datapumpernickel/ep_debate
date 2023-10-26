@@ -204,3 +204,10 @@ return(result)
 
 future::plan("multisession", workers = 8)
 test <- future_map_dfr(files,parse_debate,.progress = T)
+
+dir.create('02_clean_data')
+write_rds(test, '02_clean_data/parsed_debates_raw.rds')
+
+
+zip(zipfile = '02_clean_data/parsed_raw_debates.zip',
+    files = '02_clean_data/parsed_debates_raw.rds')
