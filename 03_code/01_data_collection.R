@@ -1,11 +1,12 @@
 #### PAUL BOCHTLER
-#### 11.12.2021
+#### 26.10.2023
 
 #-----------------------------------------#
 #### SET ENVIRONMENT                   ####
 #-----------------------------------------#
 
 setwd(dirname(rstudioapi::getActiveDocumentContext()$path))
+setwd("../")
 getwd()
 
 ## empty potential rests from other scripts
@@ -26,77 +27,57 @@ packs <-
 
 p_load(char = packs)
 
+source("03_code/00_functions.R")
 
+
+
+
+
+# Get Session Dates and Links -------------------------------------------------------------------------------------
+
+## Set Directory for Calendar Data
 dir <- '01_raw_data/calendar'
+dir.create(dir, recursive = T)  # Ensure directory exists
 
-get_calendar <- function(termid, dir){
-  if(!file.exists(glue('{dir}/{termid}.csv'))){
-  url <- "https://www.europarl.europa.eu/plenary/en/ajax/getSessionCalendar.html?family=CRE&termId="
-  composed_url <- glue(url,termid)
-  res <- request(composed_url) |>
-    req_perform() |>
-    resp_body_json(simplifyVector = T) |>
-    pluck("sessionCalendar")
-
-  write_csv(res,glue('{dir}/{termid}.csv'))}
-}
-
-dir.create(dir,recursive = T)
-
+## Download Calendar Data
 for(i in 5:9){
-  get_calendar(i,dir)
+  get_calendar(i, dir)  # Fetch and save calendar data
 }
 
-calendars <- list.files(dir,full.names = T) |>
+## Process Calendar Files
+calendars <- list.files(dir, full.names = T) |>
   map_dfr(read_csv, show_col_types = F) |>
   clean_names() |>
-  mutate(id = str_remove_all(url,'.*document/') |>
+  mutate(id = str_remove_all(url, '.*document/') |>
            str_remove_all('.html')) |>
   distinct() |>
-  filter(!is.na(url))
+  filter(!is.na(url))  # Remove NA URLs
 
+## Count Unique IDs
 length(unique(calendars$id))
 
+# Get TOCs (Table of Contents) -------------------------------------------------------------------------------------
+
+## Set Directory for TOC Data
 dir <- '01_raw_data/tocs'
-dir.create(dir,recursive = T)
+dir.create(dir, recursive = T)  # Ensure directory exists
 
-
-
-get_tocs <- function(url, dir, id) {
-  if (!file.exists(glue('{dir}/{id}.html'))) {
-    res <- request(url) |>
-      req_throttle(120 / 60) |>
-      req_perform() |>
-      resp_body_string() |>
-      write_lines(glue('{dir}/{id}.html'))
-  }
-}
+## Download and Process TOCs in Parallel
 future::plan("multisession", workers = 6)
-future_pmap(list(url = calendars$url, dir = dir,id = calendars$id),get_tocs,.progress = T)
+future_pmap(list(url = calendars$url, dir = dir, id = calendars$id), get_tocs, .progress = T)
 
-
+## List TOC File Paths
 paths <- list.files(dir, full.names = T)
-path <- paths[1]
-parse_tocs <- function(path){
 
-  html <- read_html(path)
+# Parse TOCs -------------------------------------------------------------------------------------
 
-  orders <- html_elements(html,'.list_summary a') |>
-    html_text()
-  orders_ref <- html_elements(html,'.list_summary a') |>
-    html_attr('href')
-
-  result <- tibble(orders,orders_ref,path)
-
-}
-
-
+## Parse TOCs in Parallel
 future::plan("multisession", workers = 14)
-all_tops <- future_map_dfr(paths,parse_tocs,.progress = T)
+all_tops <- future_map_dfr(paths, parse_tocs, .progress = T)
 
+# Data Cleaning and Filtering -------------------------------------------------------------------------------------
 
-
-check_non_debates <- all_tops |>
+frequent_tocs_not_debates <- all_tops |>
   filter(!str_detect(orders,'\\(debate\\)')) |>
   mutate(orders = tolower(orders) |> str_squish()) |>
   mutate(orders = str_remove_all(orders,'^ \\d{1,2}. ')) |>
@@ -111,7 +92,7 @@ check_non_debates <- all_tops |>
   filter(!n<10)
 
 
-check_non_debates2 <- all_tops |>
+unfrequent_tocs_greater_one_not_debates <- all_tops |>
   filter(!str_detect(orders,'\\(debate\\)')) |>
   mutate(orders = tolower(orders) |> str_squish()) |>
   mutate(orders = str_remove_all(orders,'^ \\d{1,2}. ')) |>
@@ -125,7 +106,7 @@ check_non_debates2 <- all_tops |>
   filter(!str_detect(orders,'situation in the middle east')) |>
   filter(n<10)
 
-part_debates <- all_tops |>
+unfrequent_tocs_greater_one_debates <- all_tops |>
   filter(!str_detect(orders,'\\(debate\\)')) |>
   mutate(orders = tolower(orders) |> str_squish()) |>
   mutate(orders = str_remove_all(orders,'^ \\d{1,2}. ')) |>
@@ -140,15 +121,16 @@ part_debates <- all_tops |>
   filter(n<10) |>
   filter(!str_detect(orders,'vote|discharge|amendment|negotiation|resumption|welcome|adjournment|action taken|address by|corrigend|composition of|third voting|voting time|written declaration|written statement|statement by the president|approval of the|change to the agenda|delegated acts|^election of the|formal sitting|oral question|request for|signature of|other business|consent procedure|calendar of part-session|membership of'))
 
-check_non_debates2 <- anti_join(check_non_debates2,part_debates, by = 'orders')
+unfrequent_tocs_greater_one_not_debates <- anti_join(unfrequent_tocs_greater_one_not_debates,
+                                                     unfrequent_tocs_greater_one_debates, by = 'orders')
 
 
 
 only_debates <- all_tops |>
   mutate(orig_orders = orders,
          orders = tolower(orders) |> str_squish()) |>
-  anti_join(check_non_debates, by = 'orders') |>
-  anti_join(check_non_debates2, by = 'orders') |>
+  anti_join(frequent_tocs_not_debates, by = 'orders') |>
+  anti_join(unfrequent_tocs_greater_one, by = 'orders') |>
   filter(!str_detect(orders,'votes'))|>
   filter(!str_detect(orders,'motion of censure'))|>
   filter(!str_detect(orders,'opening of the session'))|>
@@ -160,54 +142,33 @@ only_debates <- all_tops |>
   mutate(orders_ref = str_c('https://www.europarl.europa.eu',orders_ref))
 
 
+# Get Debates -------------------------------------------------------------------------------------
+
+## Set Directory for Debate Data
 dir <- '01_raw_data/debates'
-dir.create(dir,recursive = T)
+dir.create(dir, recursive = T)  # Ensure directory exists
 
-id <- only_debates$id[1]
-get_debate <- function(url,dir,id){
-  if (!file.exists(glue('{dir}/{id}'))) {
-    res <- request(url) |>
-      req_throttle(120 / 60) |>
-      req_perform() |>
-      resp_body_string() |>
-      write_lines(glue('{dir}/{id}'))
-  }
-}
-
+## Download and Process Debates in Parallel
 future::plan("multisession", workers = 24)
-future_pmap(list(url = only_debates$orders_ref, dir = dir,id = only_debates$id),get_debate,.progress = T)
+future_pmap(list(url = only_debates$orders_ref, dir = dir, id = only_debates$id), get_debate, .progress = T)
 
-files <- list.files(dir,full.names = T)
+# Parse Debates -------------------------------------------------------------------------------------
 
-path <- files[100]
+## List Debate File Paths
+files <- list.files(dir, full.names = T)
 
-parse_debate <- function(path){
-  html <- read_html(path)
-
-  paragraphs_header <- html_elements(html, '.contents') |>
-    map_chr(~html_element(.x,'.doc_subtitle_level1_bis') |>  html_text())
-
-  paragraphs_text <- html_elements(html, '.contents') |>
-    map_chr(html_text)
-
-  party <- html_elements(html, '.contents') |>
-    map_chr(~html_element(.x,'.bold') |>  html_text())
-
-  parl_function <- html_elements(html, '.contents') |>
-    map_chr(~html_element(.x,'.italic') |>  html_text())
-
-  result <-
-    tibble(paragraphs_text, paragraphs_header, party, parl_function, path) |>
-    fill(paragraphs_header, party,parl_function, .direction = 'down')
-return(result)
-}
-
+## Parse Debates in Parallel
 future::plan("multisession", workers = 8)
-test <- future_map_dfr(files,parse_debate,.progress = T)
+test <- future_map_dfr(files, parse_debate, .progress = T)
 
+# Save Processed Data -------------------------------------------------------------------------------------
+
+## Create Clean Data Directory
 dir.create('02_clean_data')
+
+## Save Parsed Debates as RDS
 write_rds(test, '02_clean_data/parsed_debates_raw.rds')
 
-
+## Zip the RDS File
 zip(zipfile = '02_clean_data/parsed_raw_debates.zip',
     files = '02_clean_data/parsed_debates_raw.rds')
