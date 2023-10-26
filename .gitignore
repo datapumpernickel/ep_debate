@@ -3,6 +3,7 @@ venv/*
 
 02_documentation/Dokumentation.xlsx
 05_results/Dokumentation.xlsx
+01_raw_data/ext_dta/*.csv
 
 *.Rproj
 

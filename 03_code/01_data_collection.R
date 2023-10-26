@@ -23,14 +23,13 @@ packs <-
     'rvest',
     'httr2',
     'glue',
-    'furrr' )
+    'furrr',"archive")
 
 p_load(char = packs)
 
 source("03_code/00_functions.R")
 
-
-
+parse_debates_logical <- F
 
 
 # Get Session Dates and Links -------------------------------------------------------------------------------------
@@ -130,7 +129,7 @@ only_debates <- all_tops |>
   mutate(orig_orders = orders,
          orders = tolower(orders) |> str_squish()) |>
   anti_join(frequent_tocs_not_debates, by = 'orders') |>
-  anti_join(unfrequent_tocs_greater_one, by = 'orders') |>
+  anti_join(unfrequent_tocs_greater_one_not_debates, by = 'orders') |>
   filter(!str_detect(orders,'votes'))|>
   filter(!str_detect(orders,'motion of censure'))|>
   filter(!str_detect(orders,'opening of the session'))|>
@@ -154,21 +153,49 @@ future_pmap(list(url = only_debates$orders_ref, dir = dir, id = only_debates$id)
 
 # Parse Debates -------------------------------------------------------------------------------------
 
-## List Debate File Paths
-files <- list.files(dir, full.names = T)
+if(parse_debates_logical) {
+  ## List Debate File Paths
+  files <- list.files(dir, full.names = T)
+  
+  ## Parse Debates in Parallel
+  future::plan("multisession", workers = 8)
+  test <- future_map_dfr(files, parse_debate, .progress = T)
+  # Save Processed Data -------------------------------------------------------------------------------------
+  
+  ## Create Clean Data Directory
+  dir.create('04_clean_data')
+  
+  ## Save Parsed Debates as RDS
+  write_rds(test, '02_clean_data/parsed_debates_raw.rds')
+  
+  ## Zip the RDS File
+  zip(zipfile = '02_clean_data/parsed_raw_debates.zip',
+      files = '02_clean_data/parsed_debates_raw.rds')
+}
 
-## Parse Debates in Parallel
-future::plan("multisession", workers = 8)
-test <- future_map_dfr(files, parse_debate, .progress = T)
 
-# Save Processed Data -------------------------------------------------------------------------------------
 
-## Create Clean Data Directory
-dir.create('02_clean_data')
+## unpack data
+archive::archive_extract('04_clean_data/parsed_raw_debates.zip', 
+                         dir = "04_clean_data",
+                         files = "02_clean_data/parsed_debates_raw.rds")
 
-## Save Parsed Debates as RDS
-write_rds(test, '02_clean_data/parsed_debates_raw.rds')
+fs::file_move("04_clean_data/02_clean_data/parsed_debates_raw.rds","04_clean_data/parsed_debates_raw.rds")
+fs::dir_delete("04_clean_data/02_clean_data")
 
-## Zip the RDS File
-zip(zipfile = '02_clean_data/parsed_raw_debates.zip',
-    files = '02_clean_data/parsed_debates_raw.rds')
+speeches <- read_rds("04_clean_data/parsed_debates_raw.rds")
+
+metadata <- 
+
+speeches_clean <- speeches |>
+  left_join(only_debates |> mutate(
+    path_toc = path,
+    path = str_c("01_raw_data/debates/",id) ) |> 
+      select(orig_orders, orders_ref, path_toc, path))
+
+first_paragraph <- speeches_clean |> 
+  group_by(path) |> 
+  slice(1) |> 
+  mutate(debate = str_detect(paragraphs_text,"debate|Debate")) |> 
+  mutate(year = str_extract(path, "\\d{4}")) |> 
+  ungroup()
