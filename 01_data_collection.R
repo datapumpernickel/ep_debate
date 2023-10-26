@@ -196,10 +196,11 @@ parse_debate <- function(path){
   parl_function <- html_elements(html, '.contents') |>
     map_chr(~html_element(.x,'.italic') |>  html_text())
 
-  result <- tibble(paragraphs_text, paragraphs_header, path) |>
-    fill(paragraphs_header, .direction = 'down')
-
+  result <-
+    tibble(paragraphs_text, paragraphs_header, party, parl_function, path) |>
+    fill(paragraphs_header, party,parl_function, .direction = 'down')
+return(result)
 }
 
-future::plan("multisession", workers = 12)
-test <- future_map_dfr(files[1:1000],parse_debate)
+future::plan("multisession", workers = 8)
+test <- future_map_dfr(files,parse_debate,.progress = T)
