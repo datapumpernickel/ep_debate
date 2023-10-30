@@ -22,7 +22,7 @@ packs <-
     'purrr',
     'rvest',
     'httr2',"lubridate",
-    'glue',"cli","datatable".
+    'glue',"cli",
     'furrr',"archive")
 
 p_load(char = packs)
@@ -62,7 +62,7 @@ dir <- '01_raw_data/tocs'
 dir.create(dir, recursive = T)  # Ensure directory exists
 
 ## Download and Process TOCs in Parallel
-future::plan("multisession", workers = 6)
+future::plan("multisession", workers = 32)
 future_pmap(list(url = calendars$url, dir = dir, id = calendars$id), get_tocs, .progress = T)
 
 ## List TOC File Paths
@@ -71,7 +71,6 @@ paths <- list.files(dir, full.names = T)
 # Parse TOCs -------------------------------------------------------------------------------------
 
 ## Parse TOCs in Parallel
-future::plan("multisession", workers = 14)
 all_tops <- future_map_dfr(paths, parse_tocs, .progress = T)
 
 # Data Cleaning and Filtering -------------------------------------------------------------------------------------
@@ -157,7 +156,7 @@ dir <- '01_raw_data/debates'
 dir.create(dir, recursive = T)  # Ensure directory exists
 
 ## Download and Process Debates in Parallel
-pmap(
+future_pmap(
   list(
     url = debates_links$orders_ref,
     dir = dir,
@@ -190,12 +189,12 @@ if(parse_debates_logical) {
 }
 
 ## unpack data
-archive::archive_extract('04_clean_data/parsed_raw_debates.zip', 
-                         dir = "04_clean_data",
-                         files = "02_clean_data/parsed_debates_raw.rds")
-
-fs::file_move("04_clean_data/02_clean_data/parsed_debates_raw.rds","04_clean_data/parsed_debates_raw.rds")
-fs::dir_delete("04_clean_data/02_clean_data")
+# archive::archive_extract('04_clean_data/parsed_raw_debates.zip', 
+#                          dir = "04_clean_data",
+#                          files = "02_clean_data/parsed_debates_raw.rds")
+# 
+# fs::file_move("04_clean_data/02_clean_data/parsed_debates_raw.rds","04_clean_data/parsed_debates_raw.rds")
+# fs::dir_delete("04_clean_data/02_clean_data")
 
 speeches <- read_rds("04_clean_data/parsed_debates_raw.rds")
 
@@ -228,43 +227,53 @@ speeches_clean <- speeches |>
   )
   
 
-# first_paragraph <- speeches_clean |> 
-#   group_by(path) |> 
-#   slice(1) |> 
-#   mutate(debate = str_detect(paragraphs_text,"debate|Debate")) |> 
-#   mutate(year = str_extract(path, "\\d{4}")) |> 
-#   ungroup()
-# 
-# 
-# speakers <- speeches_clean |> 
-#   count(paragraphs_header)
+if(F){
+  ## get data from ParlEE 
+  ## here: https://dataverse.harvard.edu/file.xhtml?fileId=6936027&version=1.1 
+  request("https://dvn-cloud.s3.amazonaws.com/10.7910/DVN/VOPK0E/186509b6618-519382a36288?response-content-disposition=attachment%3B%20filename%2A%3DUTF-8%27%27ParlEE_EP_plenary_speeches.csv&response-content-type=text%2Fcsv&X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Date=20231030T103745Z&X-Amz-SignedHeaders=host&X-Amz-Expires=3600&X-Amz-Credential=AKIAIEJ3NV7UYCSRJC7A%2F20231030%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Signature=f4bc63499f38fa35284e73b17e09ea5f1aacae43615f617e9c639414ed407733") |> 
+    req_perform() |> 
+    resp_body_string() |> 
+    write_lines("01_raw_data/ext_data/parlee_ep_plenary_speeches.csv")
+}
 
 
-parlspeech <- read_csv("01_raw_data/ext_dta/ParlEE_EP_plenary_speeches.csv") |> 
+parlspeech <- read_csv("01_raw_data/ext_dta/parlee_ep_plenary_speeches.csv") |> 
   mutate(date_clean = dmy(date))
 
 
+future::plan("multisession", workers = 24)
 
 speeches_clean_add <- speeches_clean |>
   filter(!date_clean %in% parlspeech$date_clean) |>
   group_by(path_cre) |>
   mutate(id_speaker = consecutive_id(speaker)) |>
-  rowwise() |>
-  mutate(first_string = paste(speaker, party, italics,
-                              collapse = " ")) |>
-  mutate(first_string = str_remove_all(first_string, "NA")) |>
+  ungroup() 
+
+first_string <- speeches_clean_add |> distinct(speaker, party, italics) |> 
+  mutate(first_string = future_pmap_chr(list(speaker, party, italics),
+                                    function(speaker, party, italics){
+                                      paste(speaker, party, italics, collapse = " ") |> str_remove_all("NA")
+                                      },
+                                    .progress = T)
+  ) 
+
+future::plan("sequential")
+
+speeches_clean_add <- speeches_clean_add |> 
+  left_join(first_string) |> 
   group_by(path_cre, id_speaker) |>
   mutate(p_id = row_number(),
-         text = if_else(p_id == 1, str_remove(text, first_string), text)) |>
-  group_by(path_cre, id_speaker) |>
-  mutate(
-    p_id = row_number(),
-    text = if_else(
-      p_id == 1,
-      stringi::stri_replace_all_fixed(text, 
-                                      first_string, 
-                                      replacement = ""),
-      text
-    )
-  )
+         text = pmap_chr(list(p_id, text, first_string),
+                                function(p_id, text, first_string) {
+                                  if (p_id == 1) {
+                                    text <-
+                                      stringi::stri_replace_all_fixed(text, first_string, replacement = "")
+                                  } else {
+                                    text
+                                  }
+                                  
+                                }, 
+                                .progress = T)) |> 
+  group_by(date_clean, speaker, party, italics, path_cre, path_toc, orig_orders, url_cre, id_speaker) |> 
+  summarise(text = paste0(text |> str_squish(), collapse = "\n"))
 
