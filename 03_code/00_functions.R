@@ -33,14 +33,23 @@ parse_tocs <- function(path){
   result <- tibble(orders,orders_ref,path)
   
 }
+# url <-  debates_links$orders_ref[22604]
 
+safe_req_perform <- safely(req_perform)
 
-get_debate <- function(url,dir,id){
+get_debate <- function(url, dir, id) {
   if (!file.exists(glue('{dir}/{id}'))) {
-    res <- request(url) |>
-      req_throttle(120 / 60) |>
-      req_perform() |>
-      resp_body_string() |>
+    res <- request(url) %>%
+      req_throttle(120 / 60)
+    
+    res_safe <- safe_req_perform(res)
+    
+    if (is.null(res_safe$result)) {
+      cli::cli_alert_warning(glue("Performing request failed: {res_safe$error}"))
+      return(NULL)
+    }
+    
+    resp_body_string(res_safe$result) %>%
       write_lines(glue('{dir}/{id}'))
   }
 }

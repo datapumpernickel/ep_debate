@@ -21,8 +21,8 @@ packs <-
     "janitor",
     'purrr',
     'rvest',
-    'httr2',
-    'glue',
+    'httr2',"lubridate",
+    'glue',"cli","datatable".
     'furrr',"archive")
 
 p_load(char = packs)
@@ -76,6 +76,8 @@ all_tops <- future_map_dfr(paths, parse_tocs, .progress = T)
 
 # Data Cleaning and Filtering -------------------------------------------------------------------------------------
 
+## check which ones might be debates
+
 frequent_tocs_not_debates <- all_tops |>
   filter(!str_detect(orders,'\\(debate\\)')) |>
   mutate(orders = tolower(orders) |> str_squish()) |>
@@ -123,8 +125,6 @@ unfrequent_tocs_greater_one_debates <- all_tops |>
 unfrequent_tocs_greater_one_not_debates <- anti_join(unfrequent_tocs_greater_one_not_debates,
                                                      unfrequent_tocs_greater_one_debates, by = 'orders')
 
-
-
 only_debates <- all_tops |>
   mutate(orig_orders = orders,
          orders = tolower(orders) |> str_squish()) |>
@@ -138,18 +138,34 @@ only_debates <- all_tops |>
   filter(!str_detect(orders,'question time '))|>
   filter(!str_detect(orders,'order of business ')) |>
   mutate(id = str_remove_all(orders_ref,'/doceo/document/')) |>
-  mutate(orders_ref = str_c('https://www.europarl.europa.eu',orders_ref))
+  mutate(orders_ref = str_c('https://www.europarl.europa.eu',orders_ref)) |> 
+  distinct(id, orig_orders,path, orders_ref)
+
 
 
 # Get Debates -------------------------------------------------------------------------------------
+
+## make id and links
+debates_links <- all_tops |>
+  mutate(orig_orders = orders,
+         orders = tolower(orders) |> str_squish())|>
+  mutate(id = str_remove_all(orders_ref,'/doceo/document/')) |>
+  mutate(orders_ref = str_c('https://www.europarl.europa.eu',orders_ref))
 
 ## Set Directory for Debate Data
 dir <- '01_raw_data/debates'
 dir.create(dir, recursive = T)  # Ensure directory exists
 
 ## Download and Process Debates in Parallel
-future::plan("multisession", workers = 24)
-future_pmap(list(url = only_debates$orders_ref, dir = dir, id = only_debates$id), get_debate, .progress = T)
+pmap(
+  list(
+    url = debates_links$orders_ref,
+    dir = dir,
+    id = debates_links$id
+  ),
+  get_debate,
+  .progress = T
+)
 
 # Parse Debates -------------------------------------------------------------------------------------
 
@@ -158,22 +174,20 @@ if(parse_debates_logical) {
   files <- list.files(dir, full.names = T)
   
   ## Parse Debates in Parallel
-  future::plan("multisession", workers = 8)
-  test <- future_map_dfr(files, parse_debate, .progress = T)
+  future::plan("multisession", workers = 32)
+  full_data <- future_map_dfr(files, parse_debate, .progress = T)
   # Save Processed Data -------------------------------------------------------------------------------------
   
   ## Create Clean Data Directory
   dir.create('04_clean_data')
   
   ## Save Parsed Debates as RDS
-  write_rds(test, '02_clean_data/parsed_debates_raw.rds')
+  write_rds(full_data, '04_clean_data/parsed_debates_raw.rds')
   
   ## Zip the RDS File
-  zip(zipfile = '02_clean_data/parsed_raw_debates.zip',
-      files = '02_clean_data/parsed_debates_raw.rds')
+  zip(zipfile = '04_clean_data/parsed_raw_debates.zip',
+      files = '04_clean_data/parsed_debates_raw.rds')
 }
-
-
 
 ## unpack data
 archive::archive_extract('04_clean_data/parsed_raw_debates.zip', 
@@ -185,17 +199,72 @@ fs::dir_delete("04_clean_data/02_clean_data")
 
 speeches <- read_rds("04_clean_data/parsed_debates_raw.rds")
 
-metadata <- 
 
 speeches_clean <- speeches |>
-  left_join(only_debates |> mutate(
-    path_toc = path,
-    path = str_c("01_raw_data/debates/",id) ) |> 
-      select(orig_orders, orders_ref, path_toc, path))
+  left_join(
+    debates_links |> mutate(
+      path_toc = path,
+      path = str_c("01_raw_data/debates/", id)
+    ) |>
+      select(orig_orders, orders_ref, path_toc, path)
+  ) |>
+  mutate(
+    date = str_remove_all(path, ".*debates/"),
+    month = str_extract(date, "-\\d{2}-") |> str_remove_all("-"),
+    day = str_extract(date, "-\\d{2}-[A-Za-z]") |> str_remove("-[A-Za-z]"),
+    year = str_extract(date, "\\d{4}")
+  ) |>
+  mutate(date_clean = dmy(str_c(day, "-", month, "-", year))) |>
+  select(
+    date_clean,
+    text = paragraphs_text,
+    speaker = paragraphs_header,
+    party ,
+    italics = parl_function,
+    path_cre = path,
+    path_toc,
+    orig_orders,
+    url_cre = orders_ref
+  )
+  
 
-first_paragraph <- speeches_clean |> 
-  group_by(path) |> 
-  slice(1) |> 
-  mutate(debate = str_detect(paragraphs_text,"debate|Debate")) |> 
-  mutate(year = str_extract(path, "\\d{4}")) |> 
-  ungroup()
+# first_paragraph <- speeches_clean |> 
+#   group_by(path) |> 
+#   slice(1) |> 
+#   mutate(debate = str_detect(paragraphs_text,"debate|Debate")) |> 
+#   mutate(year = str_extract(path, "\\d{4}")) |> 
+#   ungroup()
+# 
+# 
+# speakers <- speeches_clean |> 
+#   count(paragraphs_header)
+
+
+parlspeech <- read_csv("01_raw_data/ext_dta/ParlEE_EP_plenary_speeches.csv") |> 
+  mutate(date_clean = dmy(date))
+
+
+
+speeches_clean_add <- speeches_clean |>
+  filter(!date_clean %in% parlspeech$date_clean) |>
+  group_by(path_cre) |>
+  mutate(id_speaker = consecutive_id(speaker)) |>
+  rowwise() |>
+  mutate(first_string = paste(speaker, party, italics,
+                              collapse = " ")) |>
+  mutate(first_string = str_remove_all(first_string, "NA")) |>
+  group_by(path_cre, id_speaker) |>
+  mutate(p_id = row_number(),
+         text = if_else(p_id == 1, str_remove(text, first_string), text)) |>
+  group_by(path_cre, id_speaker) |>
+  mutate(
+    p_id = row_number(),
+    text = if_else(
+      p_id == 1,
+      stringi::stri_replace_all_fixed(text, 
+                                      first_string, 
+                                      replacement = ""),
+      text
+    )
+  )
+
