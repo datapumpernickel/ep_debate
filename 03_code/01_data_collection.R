@@ -241,39 +241,59 @@ parlspeech <- read_csv("01_raw_data/ext_dta/parlee_ep_plenary_speeches.csv") |>
   mutate(date_clean = dmy(date))
 
 
-future::plan("multisession", workers = 24)
+future::plan("multisession", workers = 12)
 
 speeches_clean_add <- speeches_clean |>
   filter(!date_clean %in% parlspeech$date_clean) |>
   group_by(path_cre) |>
   mutate(id_speaker = consecutive_id(speaker)) |>
-  ungroup() 
-
-first_string <- speeches_clean_add |> distinct(speaker, party, italics) |> 
-  mutate(first_string = future_pmap_chr(list(speaker, party, italics),
-                                    function(speaker, party, italics){
-                                      paste(speaker, party, italics, collapse = " ") |> str_remove_all("NA")
-                                      },
-                                    .progress = T)
-  ) 
-
-future::plan("sequential")
-
-speeches_clean_add <- speeches_clean_add |> 
-  left_join(first_string) |> 
+  ungroup() |>
   group_by(path_cre, id_speaker) |>
-  mutate(p_id = row_number(),
-         text = pmap_chr(list(p_id, text, first_string),
-                                function(p_id, text, first_string) {
+  mutate(p_id = row_number()) |>
+  ungroup() |>
+  mutate(text = future_pmap_chr(list(p_id, text, speaker, party, italics),
+                                function(p_id, text, speaker, party, italics) {
                                   if (p_id == 1) {
-                                    text <-
-                                      stringi::stri_replace_all_fixed(text, first_string, replacement = "")
+                                    if (!is.na(speaker)) {
+                                      text <-
+                                        stringi::stri_replace_first_fixed(text, speaker, replacement = "")
+                                    }
+                                    if (!is.na(party)) {
+                                      text <-
+                                        stringi::stri_replace_first_fixed(text, party, replacement = "")
+                                    }
+                                    if (!is.na(italics)) {
+                                      text <-
+                                        stringi::stri_replace_first_fixed(text, italics, replacement = "")
+                                    }
+                                    text <- text |>
+                                      str_squish()
                                   } else {
-                                    text
+                                    text <- str_squish(text)
                                   }
+                                  return(text)
                                   
-                                }, 
-                                .progress = T)) |> 
-  group_by(date_clean, speaker, party, italics, path_cre, path_toc, orig_orders, url_cre, id_speaker) |> 
-  summarise(text = paste0(text |> str_squish(), collapse = "\n"))
+                                },
+                                .progress = T))
 
+speeches_collapsed <- speeches_clean_add |> 
+  group_by(date_clean, speaker, path_cre, path_toc, orig_orders, url_cre, id_speaker) |> 
+  summarise(text = paste0(text |> str_squish(), collapse = "\n"),
+            italics =paste0(italics |> str_squish(), collapse = "\n"), 
+            party =paste0(party |> str_squish(), collapse = "\n"))
+
+future::plan("multisession", workers = 4)
+
+speeches_clean_missing <- speeches_collapsed |> 
+  select(date_clean, id_speaker, speaker, party, italics, text, url_cre, everything() ) |> 
+  ungroup() |> 
+  mutate(party = future_map_chr(party,~str_split_1(.x,pattern = "\\n")|> unique() |> paste0(collapse = ";"),.progress = T) ,
+         italics = future_map_chr(italics, ~str_split_1(.x,pattern = "\\n")|> unique() |> paste0(collapse = ";"),.progress = T)) |> 
+  mutate(text_id = cur_group_id(),.by = c(url_cre, id_speaker))|> 
+  arrange(date_clean, url_cre) |> 
+  mutate(session_id = cur_group_id(),.by = c(url_cre)) |> 
+  filter(!is.na(text)) |> 
+  select(text_id, session_id, everything())
+
+
+write_csv(speeches_clean_missing, "04_clean_data/missing_speeches_parlee.csv" )

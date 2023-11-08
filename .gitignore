@@ -191,3 +191,9 @@ inst/doc
 /doc/
 /Meta/
 *.rds
+04_clean_data/language_detection.csv
+.gitignore
+04_clean_data/missing_speeches_parlee.csv
+04_clean_data/missing_speeches_parlee_sents.csv
+.gitignore
+03_code/translated_sentences.jsonl
