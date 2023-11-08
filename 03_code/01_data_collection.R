@@ -295,5 +295,6 @@ speeches_clean_missing <- speeches_collapsed |>
   filter(!is.na(text)) |> 
   select(text_id, session_id, everything())
 
+## write speeches that are missing in Parlee dataset
 
 write_csv(speeches_clean_missing, "04_clean_data/missing_speeches_parlee.csv" )
