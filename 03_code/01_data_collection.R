@@ -195,7 +195,6 @@ if(parse_debates_logical) {
 # 
 # fs::file_move("04_clean_data/02_clean_data/parsed_debates_raw.rds","04_clean_data/parsed_debates_raw.rds")
 # fs::dir_delete("04_clean_data/02_clean_data")
-
 speeches_clean <- read_rds("04_clean_data/parsed_debates_raw.rds") |>
   left_join(
     debates_links |> mutate(
@@ -222,7 +221,7 @@ speeches_clean <- read_rds("04_clean_data/parsed_debates_raw.rds") |>
     orig_orders,
     url_cre = orders_ref
   )
-  
+
 
 if(F){
   ## get data from ParlEE 
@@ -314,23 +313,3 @@ speeches_collapsed <- speeches_clean |>
 ## write speeches that are missing in Parlee dataset
 
 write_csv(speeches_collapsed, "04_clean_data/missing_speeches_parlee.csv")
-
-
-### tokenization happens with spacy in python (see sentence_segmentation.py)
-
-speeches_add_sents <- read_csv("04_clean_data/missing_speeches_parlee_sents.csv") |> 
-  select(-...1) |> 
-  janitor::clean_names()
-
-speeches_add_clean <- speeches_collapsed |> 
-  select(-text) |> 
-  left_join(speeches_add_sents, by = c("text_id","session_id","id_speaker"),multiple = "all")
-
-future::plan("multisession", workers = 12)
-
-translations <- read_lines("04_clean_data/translations/translated_sentences.jsonl") |> 
-  future_map_dfr(jsonlite::fromJSON)
-
-translations_with_original <- translations |> 
-  janitor::clean_names() |> 
-  left_join(speeches_add_clean |> select(sentence, text_id, sentence_id))

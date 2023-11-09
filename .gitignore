@@ -6,7 +6,7 @@ venv/*
 01_raw_data/ext_dta/*.csv
 04_clean_data/*.rds
 04_clean_data/*.zip
-04_clean_data/*.jsonl
+04_clean_data/translations/*.jsonl
 
 
 *.Rproj
